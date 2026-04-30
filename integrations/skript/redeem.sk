@@ -1,13 +1,14 @@
-# AKMSMP /redeem command
+# AKMSMP /redeem command — simple plain-text version
 # Drop into:  plugins/Skript/scripts/redeem.sk
 # Reload:     /sk reload redeem
 #
 # Requirements:
 #   - Skript                 (https://github.com/SkriptLang/Skript)
-#   - skript-reflect OR skUtilities OR skript-yaml — for the HTTP request
-#   - An economy plugin that exposes  /eco give <player> <amount>  (Vault + EssentialsX, CMI, etc.)
+#   - skript-reflect OR a Skript HTTP add-on that supports `send async request`
+#     and `last http response` with `'s body`
+#   - An economy plugin exposing  /eco give <player> <amount>  (Vault + EssentialsX, CMI, etc.)
 #
-# IMPORTANT: edit shop_url below to your real shop URL.
+# IMPORTANT: edit shop_url below to match your shop URL.
 
 options:
     shop_url: https://akmsmp.onrender.com
@@ -21,70 +22,52 @@ command /redeem <text>:
     trigger:
         send "&6&lAKMSMP &8>> &fConnecting to shop database..." to player
 
-        # Sanitize: uppercase, no spaces. Server also normalizes, this is just defensive.
+        # Sanitize: uppercase, strip spaces. Server normalizes too — this is just defensive.
         set {_c} to "%arg-1%" in upper case
         replace all " " with "" in {_c}
 
-        # Fire the request. 'send async request' lets the server keep ticking
-        # while Render wakes up (free tier cold starts can take 30s+).
-        send async request to "{@shop_url}/api/verify-code/%{_c}%"
+        # The /api/redeem endpoint returns the amount as PLAIN TEXT — no JSON parsing needed.
+        # Async so the server keeps ticking while Render wakes up (free tier cold-start can take 30s+).
+        send async request to "{@shop_url}/api/redeem/%{_c}%"
         set {_response} to last http response
 
         if {_response} is not set:
             send "&c&lAKMSMP &8>> &fCould not reach the shop. Try again in a minute." to player
             stop
 
-        # Some HTTP addons expose .body, others expose the whole thing as text.
-        # Try .body first, fall back to the response itself.
+        # Get body — try .body first, fall back to stringifying the response.
         set {_body} to {_response}'s body
         if {_body} is not set:
             set {_body} to "%{_response}%"
 
-        # ---------- SUCCESS ----------
-        if {_body} contains """status"":""success""":
-
-            # Pull the value out of:  ..."value":10000,...
-            set {_parts::*} to {_body} split at """value"":"
-            if size of {_parts::*} < 2:
-                send "&c&lAKMSMP &8>> &fGot a response but couldn't read the amount. Contact admin." to player
-                stop
-
-            set {_value_string} to {_parts::2}
-            replace all "}" with "" in {_value_string}
-            replace all "," with "" in {_value_string}
-            replace all " " with "" in {_value_string}
-            replace all """" with "" in {_value_string}
-
-            # Trim at first non-digit (handles "10000itemName..." → "10000")
-            set {_clean} to ""
-            loop characters in {_value_string}:
-                if loop-value is "0" or "1" or "2" or "3" or "4" or "5" or "6" or "7" or "8" or "9":
-                    set {_clean} to "%{_clean}%%loop-value%"
-                else:
-                    exit loop
-
-            set {_amount} to {_clean} parsed as number
-            if {_amount} is not set:
-                send "&c&lAKMSMP &8>> &fAmount unreadable. Contact admin." to player
-                stop
-
-            execute console command "eco give %player% %{_amount}%"
-            send "&a&l✔ AKMSMP &8>> &fRedeemed! &6$%{_amount}% &fadded to your balance." to player
-            play sound "entity.player.levelup" with volume 1 to player
-            broadcast "&8[&6AKMSMP&8] &e%player% &7just redeemed a code!"
-            stop
-
-        # ---------- FAILURE PATHS ----------
-        if {_body} contains "already redeemed":
+        # ---------- KNOWN ERROR CODES (server returns these as plain text) ----------
+        if {_body} contains "error:already-redeemed":
             send "&c&l✘ AKMSMP &8>> &fThis code was already used." to player
             stop
-        if {_body} contains "Code not active":
+        if {_body} contains "error:not-active":
             send "&c&l✘ AKMSMP &8>> &fThat code isn't active yet. Wait for admin approval." to player
             stop
-        if {_body} contains "Code not found":
+        if {_body} contains "error:not-found":
             send "&c&l✘ AKMSMP &8>> &fInvalid code. Check spelling and try again." to player
             stop
+        if {_body} contains "error:":
+            send "&c&l✘ AKMSMP &8>> &fShop error: %{_body}%" to player
+            stop
 
-        # Fallback — useful when debugging
-        send "&c&l✘ AKMSMP &8>> &fSomething went wrong. Server said:" to player
-        send "&7%{_body}%" to player
+        # ---------- SUCCESS — body is just the number, e.g. "100000" ----------
+        # Strip whitespace/newlines that some HTTP add-ons add.
+        set {_clean} to "%{_body}%"
+        replace all " " with "" in {_clean}
+        replace all "%nl%" with "" in {_clean}
+        replace all "%newline%" with "" in {_clean}
+
+        set {_amount} to {_clean} parsed as number
+        if {_amount} is not set:
+            send "&c&lAKMSMP &8>> &fGot a response but couldn't read the amount. Server said:" to player
+            send "&7%{_body}%" to player
+            stop
+
+        execute console command "eco give %player% %{_amount}%"
+        send "&a&l✔ AKMSMP &8>> &fRedeemed! &6$%{_amount}% &fadded to your balance." to player
+        play sound "entity.player.levelup" with volume 1 to player
+        broadcast "&8[&6AKMSMP&8] &e%player% &7just redeemed a code!"
