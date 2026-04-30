@@ -200,21 +200,54 @@ app.put('/api/admin/settings', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Public verify (for Discord bot / Minecraft plugin) ----------
+// ---------- Public verify (for Discord bot / Minecraft plugin / Skript) ----------
+// Normalize incoming code: uppercase, strip anything that isn't A-Z/0-9.
+// This makes the endpoint forgiving of typos like trailing slashes, %20, accidental dashes, lowercase.
+function normalizeCode(raw) {
+  return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+// Non-destructive lookup — does NOT mark the code used. Useful for debugging from a browser.
+app.get('/api/peek-code/:code', (req, res) => {
+  const code = normalizeCode(req.params.code);
+  if (!code) return res.status(400).json({ status: 'error', message: 'Code required' });
+  const o = Orders.all().find(x => normalizeCode(x.code) === code);
+  if (!o) return res.status(404).json({ status: 'error', message: 'Code not found', queriedCode: code });
+  res.json({
+    status: 'ok',
+    code: o.code,
+    value: Number(o.akmValue),
+    itemName: o.itemName,
+    orderStatus: o.status,
+    used: o.used === 'true',
+    createdAt: o.createdAt,
+    decidedAt: o.decidedAt,
+  });
+});
+
 // Marks the code as used on the FIRST successful verify; subsequent calls fail.
 app.get('/api/verify-code/:code', (req, res) => {
-  const code = String(req.params.code || '').trim();
+  const raw = String(req.params.code || '');
+  const code = normalizeCode(raw);
+  console.log(`[verify-code] raw="${raw}" normalized="${code}" from ${req.ip}`);
   if (!code) return res.status(400).json({ status: 'error', message: 'Code required' });
   const orders = Orders.all();
-  const idx = orders.findIndex(o => o.code && o.code.toUpperCase() === code.toUpperCase());
-  if (idx === -1) return res.status(404).json({ status: 'error', message: 'Code not found' });
+  const idx = orders.findIndex(o => normalizeCode(o.code) === code);
+  if (idx === -1) {
+    console.log(`[verify-code] NOT FOUND: ${code} (have ${orders.filter(o => o.code).length} codes total)`);
+    return res.status(404).json({ status: 'error', message: 'Code not found' });
+  }
   const o = orders[idx];
   if (o.status !== 'paid') return res.status(400).json({ status: 'error', message: 'Code not active' });
   if (o.used === 'true') return res.status(400).json({ status: 'error', message: 'Code already redeemed' });
   orders[idx].used = 'true';
   Orders.save(orders);
+  console.log(`[verify-code] REDEEMED: ${o.code} value=${o.akmValue} item="${o.itemName}"`);
   res.json({ status: 'success', code: o.code, value: Number(o.akmValue), itemName: o.itemName });
 });
+
+// Health check for Render
+app.get('/api/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // SPA fallback - serve index.html for non-API routes
 app.get(/^\/(?!api\/).*/, (req, res) => {
