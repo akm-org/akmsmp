@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AKMSMP — Shop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo-mark">A</div>
+      <div>
+        <div class="brand-title" id="serverName">AKMSMP</div>
+        <div class="brand-sub">Magic Code Shop</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+  </header>
+
+  <main id="view"></main>
+
+  <div class="toast" id="toast"></div>
+
+  <template id="t-auth">
+    <section class="panel narrow">
+      <div class="tabs">
+        <button class="tab active" data-mode="login">Login</button>
+        <button class="tab" data-mode="signup">Signup</button>
+      </div>
+      <h1 id="authTitle">Welcome back</h1>
+      <p class="muted" id="authSub">Sign in to your AKMSMP account.</p>
+      <form id="authForm" class="form">
+        <label>Email <input type="email" name="email" required autocomplete="email" /></label>
+        <label>Password <input type="password" name="password" minlength="6" required autocomplete="current-password" /></label>
+        <button type="submit" class="btn primary glow">Continue</button>
+      </form>
+      <p class="muted small">First account becomes admin automatically.</p>
+    </section>
+  </template>
+
+  <template id="t-shop">
+    <section class="panel">
+      <div class="section-head">
+        <h1>Shop</h1>
+        <p class="muted">Pick a pack. Pay via UPI. Get your magic code from the admin.</p>
+      </div>
+      <div id="items" class="items-grid"></div>
+    </section>
+  </template>
+
+  <template id="t-pay">
+    <section class="panel narrow">
+      <button class="link" id="backToShop">← Back to shop</button>
+      <h1>Pay & Confirm</h1>
+      <div class="pay-card">
+        <div class="pay-meta">
+          <div class="pill">Order #<span id="payOrderId"></span></div>
+          <h2 id="payItem"></h2>
+          <div class="price">₹<span id="payPrice"></span></div>
+          <div class="muted">For <span id="payValue"></span> AKM Dollars</div>
+        </div>
+        <div class="qr-wrap">
+          <img id="qrImg" alt="UPI QR" />
+          <div class="upi-info">
+            <div>UPI ID: <strong id="upiId"></strong></div>
+            <div>Pay to: <strong id="upiName"></strong></div>
+            <div class="muted small">Scan with any UPI app (GPay, PhonePe, Paytm).</div>
+          </div>
+        </div>
+      </div>
+      <form id="utrForm" class="form">
+        <label>UTR / Transaction ID
+          <input name="utr" required minlength="6" placeholder="e.g. 312345678901" />
+        </label>
+        <button type="submit" class="btn primary glow">Submit & Wait for Approval</button>
+      </form>
+    </section>
+  </template>
+
+  <template id="t-orders">
+    <section class="panel">
+      <div class="section-head">
+        <h1>Order History</h1>
+        <p class="muted">Your purchases and magic codes.</p>
+      </div>
+      <div id="myOrders" class="orders-list"></div>
+    </section>
+  </template>
+
+  <template id="t-admin">
+    <section class="panel">
+      <div class="section-head">
+        <h1>Admin Dashboard</h1>
+        <div class="admin-tabs">
+          <button class="tab active" data-tab="orders">Orders</button>
+          <button class="tab" data-tab="items">Items / Pricing</button>
+          <button class="tab" data-tab="settings">Settings</button>
+        </div>
+      </div>
+      <div id="adminBody"></div>
+    </section>
+  </template>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
