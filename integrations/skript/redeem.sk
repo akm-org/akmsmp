@@ -1,0 +1,89 @@
+# AKMSMP /redeem command
+# Drop this file into:  plugins/Skript/scripts/redeem.sk
+# Then run: /sk reload redeem  (or restart the server)
+#
+# Requirements:
+#   - Skript                 (https://github.com/SkriptLang/Skript)
+#   - skript-reflect OR skUtilities OR skript-yaml — for the HTTP request
+#   - An economy plugin that exposes  /eco give <player> <amount>  (Vault + EssentialsX, CMI, etc.)
+#
+# How it works:
+#   1. Player runs:  /redeem ABC123
+#   2. Server hits  https://your-shop-url/api/verify-code/ABC123
+#   3. Shop returns the AKM value AND marks the code as used (one-time only)
+#   4. Server runs  eco give <player> <value>  via console
+#
+# IMPORTANT: change SHOP_URL below to your real shop URL (Render, Replit, wherever).
+
+options:
+    shop_url: https://your-shop-url.onrender.com
+
+command /redeem <text>:
+    usage: &cUsage: /redeem <CODE>
+    permission: akmsmp.redeem
+    permission message: &cYou don't have permission to redeem codes.
+    cooldown: 3 seconds
+    cooldown message: &cPlease wait a moment before redeeming again.
+    trigger:
+        send "&6&lAKMSMP &8>> &fConnecting to shop..." to player
+
+        # Sanitize the code: trim, uppercase, allow only A-Z 0-9 (length 6)
+        set {_code} to "%arg-1%" in upper case
+        replace all " " with "" in {_code}
+        if length of {_code} is not 6:
+            send "&c&lAKMSMP &8>> &fCodes are 6 characters. That doesn't look right." to player
+            stop
+
+        # Fire the HTTP GET (skript-reflect / skUtilities syntax)
+        set {_url} to "{@shop_url}/api/verify-code/%{_code}%"
+        send request to {_url}
+        set {_response} to last http response
+
+        if {_response} is not set:
+            send "&c&lAKMSMP &8>> &fCould not reach the shop. Try again in a minute." to player
+            stop
+
+        # SUCCESS path
+        if {_response} contains """status"":""success""":
+
+            # Pull the value out of:  ...,"value":10000,...
+            set {_parts::*} to {_response} split at """value"":"
+            if size of {_parts::*} < 2:
+                send "&c&lAKMSMP &8>> &fGot a response but couldn't read the amount. Contact admin." to player
+                stop
+
+            set {_tail} to {_parts::2}
+            # Cut at the first non-digit character
+            set {_amount_str} to ""
+            loop characters in {_tail}:
+                if loop-value is "0" or "1" or "2" or "3" or "4" or "5" or "6" or "7" or "8" or "9":
+                    set {_amount_str} to "%{_amount_str}%%loop-value%"
+                else:
+                    exit loop
+
+            set {_amount} to {_amount_str} parsed as number
+            if {_amount} is not set:
+                send "&c&lAKMSMP &8>> &fAmount unreadable. Contact admin." to player
+                stop
+
+            # Pay the player via console (works with Vault/EssentialsX/CMI)
+            execute console command "eco give %player% %{_amount}%"
+
+            send "&a&l✔ AKMSMP &8>> &fRedeemed! &6$%{_amount}% &fadded to your balance." to player
+            play sound "entity.player.levelup" with volume 1 to player
+
+            broadcast "&8[&6AKMSMP&8] &e%player% &7just redeemed a code!"
+            stop
+
+        # FAILURE paths
+        if {_response} contains "already redeemed":
+            send "&c&l✘ AKMSMP &8>> &fThis code was already used." to player
+            stop
+        if {_response} contains "Code not active":
+            send "&c&l✘ AKMSMP &8>> &fThat code isn't active yet. Wait for admin approval." to player
+            stop
+        if {_response} contains "Code not found":
+            send "&c&l✘ AKMSMP &8>> &fInvalid code. Check spelling and try again." to player
+            stop
+
+        send "&c&l✘ AKMSMP &8>> &fSomething went wrong. Try again later." to player
