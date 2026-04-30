@@ -3,7 +3,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 
 const { init, Users, Items, Orders, Settings, ITEM_HEADERS, ORDER_HEADERS } = require('./lib/db');
-const { setSession, clearSession, getUser, requireAuth, requireAdmin, hash, compare, adminEmails } = require('./lib/auth');
+const { setSession, clearSession, getUser, requireAuth, requireAdmin, isAdminUser, hash, compare, adminEmails } = require('./lib/auth');
 const { uniqueCode } = require('./lib/codes');
 
 init();
@@ -38,7 +38,7 @@ app.post('/api/signup', async (req, res) => {
   };
   Users.add(user);
   setSession(res, user.id);
-  res.json({ ok: true, user: { id: user.id, email: user.email, isAdmin: user.isAdmin === 'true' } });
+  res.json({ ok: true, user: { id: user.id, email: user.email, isAdmin: isAdminUser(user) } });
 });
 
 app.post('/api/login', async (req, res) => {
@@ -49,7 +49,7 @@ app.post('/api/login', async (req, res) => {
   const ok = await compare(password, user.passwordHash);
   if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
   setSession(res, user.id);
-  res.json({ ok: true, user: { id: user.id, email: user.email, isAdmin: user.isAdmin === 'true' } });
+  res.json({ ok: true, user: { id: user.id, email: user.email, isAdmin: isAdminUser(user) } });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -60,7 +60,7 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/me', (req, res) => {
   const u = getUser(req);
   if (!u) return res.json({ user: null });
-  res.json({ user: { id: u.id, email: u.email, isAdmin: u.isAdmin === 'true' } });
+  res.json({ user: { id: u.id, email: u.email, isAdmin: isAdminUser(u) } });
 });
 
 // ---------- Shop ----------
@@ -244,6 +244,31 @@ app.get('/api/verify-code/:code', (req, res) => {
   Orders.save(orders);
   console.log(`[verify-code] REDEEMED: ${o.code} value=${o.akmValue} item="${o.itemName}"`);
   res.json({ status: 'success', code: o.code, value: Number(o.akmValue), itemName: o.itemName });
+});
+
+// ---------- Plain-text redeem (Skript-friendly) ----------
+// Returns just the AKM amount as plain text on success, e.g. "100000".
+// Errors return non-200 status with a short text message in the body.
+// This avoids JSON parsing entirely on the Skript side.
+app.get('/api/redeem/:code', (req, res) => {
+  const raw = String(req.params.code || '');
+  const code = normalizeCode(raw);
+  console.log(`[redeem] raw="${raw}" normalized="${code}" from ${req.ip}`);
+  res.type('text/plain');
+  if (!code) return res.status(400).send('error:missing-code');
+  const orders = Orders.all();
+  const idx = orders.findIndex(o => normalizeCode(o.code) === code);
+  if (idx === -1) {
+    console.log(`[redeem] NOT FOUND: ${code}`);
+    return res.status(404).send('error:not-found');
+  }
+  const o = orders[idx];
+  if (o.status !== 'paid') return res.status(400).send('error:not-active');
+  if (o.used === 'true') return res.status(410).send('error:already-redeemed');
+  orders[idx].used = 'true';
+  Orders.save(orders);
+  console.log(`[redeem] REDEEMED: ${o.code} value=${o.akmValue} item="${o.itemName}"`);
+  res.status(200).send(String(Number(o.akmValue) || 0));
 });
 
 // Health check for Render
