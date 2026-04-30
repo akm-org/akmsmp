@@ -44,8 +44,17 @@ vercel
 | --- | --- | --- |
 | `PORT` | Port to listen on | `5000` |
 | `SESSION_SECRET` | HMAC secret for session cookies | `akmsmp-dev-secret-change-me` |
-| `ADMIN_EMAILS` | Comma-separated emails granted admin on signup | _empty_ |
+| `ADMIN_EMAILS` | Extra comma-separated emails granted admin on signup | _empty_ |
+| `SEED_ADMIN_PASSWORD` | Initial password used when seeding the two permanent admin accounts | `akm2009@` |
 | `DATA_DIR` | Where CSV files live | `./data` |
+
+### Permanent admin accounts
+
+Two accounts are auto-created on first run:
+- `adwaithkm896@gmail.com`
+- `akmsmpadmin@gmail.com`
+
+Both with the password from `SEED_ADMIN_PASSWORD` (default `akm2009@`). These emails are **always** treated as admin, even if their `isAdmin` row is changed in the CSV. Change the seed password by setting `SEED_ADMIN_PASSWORD` in Render's env vars **before** the first deploy.
 
 ## Code verify API (for your bot / Skript)
 
@@ -68,6 +77,19 @@ Already redeemed:
 The code is **marked used on the first successful response** — subsequent calls fail with HTTP 400.
 
 The endpoint is **lenient about input**: it uppercases the code and strips anything that isn't `A–Z` or `0–9`. So `abc123`, `ABC-123`, `ABC123/`, `abc%20123` all resolve to `ABC123`.
+
+### `GET /api/redeem/:code` — plain-text version (recommended for Skript)
+
+Same behavior as `/api/verify-code/` (marks the code used), but returns just the AKM amount as plain text. No JSON parsing required.
+
+| Status | Body |
+|---|---|
+| `200` | `100000` (the amount) |
+| `404` | `error:not-found` |
+| `400` | `error:not-active` |
+| `410` | `error:already-redeemed` |
+
+This is what the bundled Skript file uses.
 
 ### `GET /api/peek-code/:code` — non-destructive, for debugging
 
