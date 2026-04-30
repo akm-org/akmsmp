@@ -65,6 +65,10 @@ Already redeemed:
 
 The code is **marked used on the first successful response** — subsequent calls fail with HTTP 400.
 
+## Minecraft integration
+
+A ready-to-use Skript file for the in-game `/redeem <CODE>` command lives at [`integrations/skript/`](./integrations/skript/). Drop it into `plugins/Skript/scripts/`, set your shop URL at the top, and players can redeem codes themselves — no Discord bot needed.
+
 ## File layout
 
 ```
