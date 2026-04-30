@@ -47,7 +47,9 @@ vercel
 | `ADMIN_EMAILS` | Comma-separated emails granted admin on signup | _empty_ |
 | `DATA_DIR` | Where CSV files live | `./data` |
 
-## Code verify API (for your bot)
+## Code verify API (for your bot / Skript)
+
+### `GET /api/verify-code/:code` — destructive, marks code as used
 
 ```
 GET /api/verify-code/ABC123
@@ -64,6 +66,36 @@ Already redeemed:
 ```
 
 The code is **marked used on the first successful response** — subsequent calls fail with HTTP 400.
+
+The endpoint is **lenient about input**: it uppercases the code and strips anything that isn't `A–Z` or `0–9`. So `abc123`, `ABC-123`, `ABC123/`, `abc%20123` all resolve to `ABC123`.
+
+### `GET /api/peek-code/:code` — non-destructive, for debugging
+
+Look up a code's status WITHOUT marking it used. Open in a browser:
+
+```
+GET /api/peek-code/ABC123
+```
+
+Returns:
+```json
+{
+  "status": "ok",
+  "code": "ABC123",
+  "value": 10000,
+  "itemName": "10,000 AKM Dollars",
+  "orderStatus": "paid",
+  "used": false,
+  "createdAt": "1777571771531",
+  "decidedAt": "1777571771987"
+}
+```
+
+Use this to confirm a code exists in the database before debugging your bot/Skript.
+
+### `GET /api/healthz`
+
+Used by Render's health check. Returns `{"ok":true,"ts":...}`.
 
 ## Minecraft integration
 
