@@ -87,28 +87,6 @@ module.exports = {
       }
     }
 
-    // Notify via webhook
-    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-    if (webhookUrl) {
-      const fetch = require('node-fetch');
-      fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          embeds: [{
-            title: '✅ Order Approved',
-            color: 0x57F287,
-            fields: [
-              { name: 'Buyer', value: buyer ? buyer.email : 'Unknown', inline: true },
-              { name: 'Pack', value: order.itemName, inline: true },
-              { name: 'Code (partial)', value: `\`${formatCode(code).slice(0,9)}...\``, inline: false },
-            ],
-            timestamp: new Date().toISOString(),
-          }],
-        }),
-      }).catch(console.error);
-    }
-
     await interaction.update({
       content: `✅ Approved! Code sent to ${buyer ? buyer.email : 'buyer'} via DM.`,
       embeds: [],
