@@ -130,6 +130,14 @@ client.once(Events.ClientReady, async (c) => {
   setInterval(updatePresence, 60_000);
 });
 
-client.login(TOKEN).catch(err => console.error('[bot] Login failed:', err.message));
+client.login(TOKEN).catch(err => {
+  console.error('[bot] ❌ Login failed:', err.message);
+  if (err.message.includes('TOKEN_INVALID') || err.message.includes('invalid token')) {
+    console.error('[bot] → The DISCORD_BOT_TOKEN env var is wrong or expired. Regenerate it in the Discord Developer Portal.');
+  }
+  if (err.message.includes('DisallowedIntents') || err.message.includes('Privileged intent')) {
+    console.error('[bot] → A privileged intent is not enabled. Go to Discord Dev Portal → Bot → Privileged Gateway Intents and enable "Message Content Intent".');
+  }
+});
 
 module.exports = client;
