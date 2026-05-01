@@ -1,17 +1,17 @@
-const { Events, ActivityType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Events, ActivityType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
 const client = require('./client');
 const { tryResolve } = require('./dmFlow');
 const { deployCommands } = require('./deploy');
-const { Users, Settings } = require('../lib/db');
+const { Items } = require('../lib/db'); // Added to fetch items for !deploy
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 if (!TOKEN) {
-  console.log('[bot] DISCORD_BOT_TOKEN not set.');
+  console.log('[bot] DISCORD_BOT_TOKEN not set — bot disabled.');
   module.exports = client;
   return;
 }
@@ -26,72 +26,93 @@ for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  if (message.guild && message.content.trim().toLowerCase() === '!deploy') {
+  // Handle !deploy with Select Menu Options
+  if (message.guild && message.content.toLowerCase() === '!deploy') {
     if (!message.member.permissions.has('Administrator')) return;
 
+    const items = Items.visible();
     const shopEmbed = new EmbedBuilder()
       .setTitle('🛒 AKMSMP Quick Shop')
-      .setDescription('Select a bundle below to generate a magic code instantly!')
+      .setDescription('Select a pack from the menu below to start your purchase!')
       .setColor(0xFFD700)
-      .setFooter({ text: 'Type /redeem [code] in-game to claim.' });
+      .setFooter({ text: 'Type /redeem [code] in-game to claim after purchase.' });
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('trigger_10k').setLabel('10,000 AKM').setStyle(ButtonStyle.Success).setEmoji('💵'),
-      new ButtonBuilder().setCustomId('trigger_100k').setLabel('100,000 AKM').setStyle(ButtonStyle.Primary).setEmoji('💰')
-    );
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('shop_select_instant')
+      .setPlaceholder('Choose a pack to buy...')
+      .addOptions(items.map(i => ({
+        label: i.name,
+        description: `Price: ₹${i.priceInr}`,
+        value: i.id,
+      })));
+
+    const row = new ActionRowBuilder().addComponents(menu);
 
     await message.channel.send({ embeds: [shopEmbed], components: [row] });
-    try { await message.delete(); } catch (e) {}
+    await message.delete().catch(() => {}); 
     return;
   }
 
-  if (!message.guild) tryResolve(message.author.id, message.content);
+  if (!message.guild) {
+    tryResolve(message.author.id, message.content);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     const buyCommand = commands.get('buy');
 
+    // --- Select Menu Handling (From !deploy) ---
+    if (interaction.isStringSelectMenu() && interaction.customId === 'shop_select_instant') {
+      if (buyCommand) await buyCommand.handleInstantSelect(interaction);
+      return;
+    }
+
+    // --- Slash commands ---
     if (interaction.isChatInputCommand()) {
       const cmd = commands.get(interaction.commandName);
       if (cmd) await cmd.execute(interaction);
-    } 
+      return;
+    }
 
+    // --- Button presses ---
     if (interaction.isButton()) {
       const { customId } = interaction;
 
-      // Handle Quick Buy Buttons from !deploy
-      if (customId === 'trigger_10k' || customId === 'trigger_100k') {
-        const amount = customId === 'trigger_10k' ? 10000 : 100000;
-        if (buyCommand) await buyCommand.execute(interaction, amount);
+      // Handle Link Account redirection
+      if (customId === 'start_login_flow') {
+        const loginCmd = commands.get('login');
+        if (loginCmd) await loginCmd.execute(interaction);
         return;
       }
 
-      // Handle "Link Account" redirect from buy error
-      if (customId === 'start_link') {
-        const registerCmd = commands.get('register');
-        if (registerCmd) await registerCmd.execute(interaction);
-        return;
-      }
-
-      if (customId.startsWith('utr_')) {
+      if (customId.startsWith('utr_') && !customId.startsWith('utr_modal_')) {
         if (buyCommand) await buyCommand.handleUtrButton(interaction);
         return;
       }
+      
+      // Admin Approval/Rejection
+      const showOrders = commands.get('showorders');
+      if (customId.startsWith('approve_')) {
+        if (showOrders) await showOrders.handleApprove(interaction, customId.replace('approve_', ''));
+      } else if (customId.startsWith('reject_')) {
+        if (showOrders) await showOrders.handleReject(interaction, customId.replace('reject_', ''));
+      }
     }
 
+    // --- Modal submits ---
     if (interaction.isModalSubmit() && interaction.customId.startsWith('utr_modal_')) {
       if (buyCommand) await buyCommand.handleUtrModal(interaction);
     }
+
   } catch (err) {
     console.error('[bot] Interaction error:', err);
   }
 });
 
 client.once(Events.ClientReady, async (c) => {
-  console.log(`[bot] Online as ${c.user.tag}`);
+  console.log(`[bot] Logged in as ${c.user.tag}`);
   await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
 });
 
 client.login(TOKEN);
-module.exports = client;
