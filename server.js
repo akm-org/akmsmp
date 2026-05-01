@@ -29,18 +29,24 @@ const redeemLimiter = rateLimit({
   message: { status: 'error', message: 'Too many requests — slow down and try again.' },
 });
 
-// ---------- Discord webhook helper ----------
-async function notifyWebhook(embed) {
-  const url = process.env.DISCORD_WEBHOOK_URL;
-  if (!url) return;
+// ---------- Private admin notification (DM via bot, no public channel) ----------
+async function notifyAdmins(embed) {
   try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ embeds: [embed] }),
-    });
+    const { dmAdmins } = require('./bot/dmAdmins');
+    await dmAdmins({ embeds: [embed] });
   } catch (e) {
-    console.error('[webhook]', e.message);
+    // Bot not ready — fall back to webhook if set
+    const url = process.env.DISCORD_WEBHOOK_URL;
+    if (!url) return;
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ embeds: [embed] }),
+      });
+    } catch (we) {
+      console.error('[notify]', we.message);
+    }
   }
 }
 
@@ -149,7 +155,7 @@ app.post('/api/orders/:id/utr', requireAuth, (req, res) => {
   if (order.status !== 'awaiting_utr') return res.status(400).json({ error: 'UTR already submitted' });
   Orders.update(order.id, { utr: String(utr).trim(), status: 'processing' });
 
-  notifyWebhook({
+  notifyAdmins({
     title: '🔔 Payment Submitted (Web)',
     color: 0xF1A208,
     fields: [
@@ -202,7 +208,7 @@ app.post('/api/admin/orders/:id/accept', requireAdmin, async (req, res) => {
     dmDiscordUser(buyer.discordId, { embeds: [embed] });
   }
 
-  notifyWebhook({
+  notifyAdmins({
     title: '✅ Order Approved (Web Admin)',
     color: 0x57F287,
     fields: [
@@ -343,7 +349,7 @@ app.get('/api/verify-code/:code', redeemLimiter, async (req, res) => {
   Orders.update(o.id, { used: 'true' });
   console.log(`[verify-code] REDEEMED: ${o.code} value=${o.akmValue} player="${player}"`);
 
-  notifyWebhook({
+  notifyAdmins({
     title: '🎮 Code Redeemed In-Game!',
     color: 0x57F287,
     fields: [
@@ -376,7 +382,7 @@ app.get('/api/redeem/:code', redeemLimiter, async (req, res) => {
   Orders.update(o.id, { used: 'true' });
   console.log(`[redeem] REDEEMED: ${o.code} value=${o.akmValue} player="${player}"`);
 
-  notifyWebhook({
+  notifyAdmins({
     title: '🎮 Code Redeemed In-Game!',
     color: 0x57F287,
     fields: [
