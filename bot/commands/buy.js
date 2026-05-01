@@ -151,30 +151,22 @@ module.exports = {
 
     Orders.update(orderId, { utr, status: 'processing' });
 
-    // Notify admins via webhook
-    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-    if (webhookUrl) {
-      const fetch = require('node-fetch');
-      fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          embeds: [{
-            title: '🔔 New Payment Submitted',
-            color: 0xF1A208,
-            fields: [
-              { name: 'User', value: `${interaction.user.tag} (${linkedUser.email})`, inline: true },
-              { name: 'Pack', value: order.itemName, inline: true },
-              { name: 'Amount', value: `₹${order.priceInr}`, inline: true },
-              { name: 'UTR', value: `\`${utr}\``, inline: false },
-              { name: 'Order ID', value: `\`${orderId}\``, inline: false },
-            ],
-            footer: { text: 'Use /showorders to approve' },
-            timestamp: new Date().toISOString(),
-          }],
-        }),
-      }).catch(console.error);
-    }
+    // Notify admins via private DM (not public channel)
+    const { EmbedBuilder } = require('discord.js');
+    const { dmAdmins } = require('../dmAdmins');
+    const adminEmbed = new EmbedBuilder()
+      .setTitle('🔔 New Payment Submitted')
+      .setColor(0xF1A208)
+      .addFields(
+        { name: 'User', value: `${interaction.user.tag} (${linkedUser.email})`, inline: true },
+        { name: 'Pack', value: order.itemName, inline: true },
+        { name: 'Amount', value: `₹${order.priceInr}`, inline: true },
+        { name: 'UTR', value: `\`${utr}\``, inline: false },
+        { name: 'Order ID', value: `\`${orderId}\``, inline: false },
+      )
+      .setFooter({ text: 'Use /showorders to approve' })
+      .setTimestamp();
+    dmAdmins({ embeds: [adminEmbed] });
 
     await interaction.reply({ content: `✅ UTR **${utr}** submitted! Admin will verify and you'll receive your Magic Code via DM.`, ephemeral: true });
   },
