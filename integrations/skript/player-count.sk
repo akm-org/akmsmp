@@ -1,0 +1,21 @@
+# AKMSMP Player Count Push
+# Sends online player count to your shop website every 60 seconds.
+# Drop into: plugins/Skript/scripts/player-count.sk
+# Reload:    /sk reload player-count
+#
+# Set the same MC_PUSH_SECRET in both Render env vars and below.
+
+options:
+    shop_url:   https://akmsmp.onrender.com
+    mc_secret:  changeme_set_in_render_too
+
+every 60 seconds:
+    set {_count} to size of all players
+    set {_names} to ""
+    loop all players:
+        if {_names} is "":
+            set {_names} to "%loop-player's name%"
+        else:
+            set {_names} to "%{_names}%,%loop-player's name%"
+
+    send async request to "{@shop_url}/api/mc/player-count" with headers "x-mc-secret: {@mc_secret}, Content-Type: application/json" and body "{""count"":%{_count}%,""players"":[%{_names}%]}" using "POST"
