@@ -1,183 +1,30 @@
-const { Events, ActivityType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+// Registers slash commands with Discord. Called once at bot startup.
+const { REST, Routes } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
-const client = require('./client');
-const { tryResolve } = require('./dmFlow');
-const { deployCommands } = require('./deploy');
-const { Users, Settings } = require('../lib/db');
 
-const TOKEN = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
-const GUILD_ID = process.env.DISCORD_GUILD_ID;
-
-if (!TOKEN) {
-  console.log('[bot] DISCORD_BOT_TOKEN not set — bot disabled.');
-  module.exports = client;
-  return;
-}
-
-// Load all commands
-const commands = new Map();
-const commandsPath = path.join(__dirname, 'commands');
-for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) {
-  const cmd = require(path.join(commandsPath, file));
-  if (cmd.data) commands.set(cmd.data.name, cmd);
-}
-
-// Message Listener for !deploy and DM flows
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-
-  // 1. Handle !deploy command in servers
-  if (message.guild && message.content.toLowerCase() === '!deploy') {
-    if (!message.member.permissions.has('Administrator')) return;
-
-    const shopEmbed = new EmbedBuilder()
-      .setTitle('🛒 AKMSMP Quick Shop')
-      .setDescription('Select a bundle below to generate a payment request instantly!')
-      .setColor(0xFFD700)
-      .setFooter({ text: 'Type /redeem [code] in-game to claim.' });
-
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('trigger_10k')
-          .setLabel('Buy 10,000 AKM')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('💵'),
-        new ButtonBuilder()
-          .setCustomId('trigger_100k')
-          .setLabel('Buy 100,000 AKM')
-          .setStyle(ButtonStyle.Primary)
-          .setEmoji('💰')
-      );
-
-    await message.channel.send({ embeds: [shopEmbed], components: [row] });
-    await message.delete();
-    return;
+async function deployCommands(token, clientId, guildId) {
+  const commands = [];
+  const commandsPath = path.join(__dirname, 'commands');
+  for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) {
+    const cmd = require(path.join(commandsPath, file));
+    if (cmd.data) commands.push(cmd.data.toJSON());
   }
 
-  // 2. Forward DM replies to pending flows
-  if (!message.guild) {
-    tryResolve(message.author.id, message.content);
-  }
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
+  const rest = new REST().setToken(token);
   try {
-    // --- Slash commands ---
-    if (interaction.isChatInputCommand()) {
-      const cmd = commands.get(interaction.commandName);
-      if (!cmd) return interaction.reply({ content: '❌ Unknown command.', ephemeral: true });
-      await cmd.execute(interaction);
-      return;
-    }
-
-    // --- Button presses ---
-    if (interaction.isButton()) {
-      const { customId } = interaction;
-      const buyCmd = commands.get('buy');
-
-      // Handle Quick Buy Buttons from !deploy
-      if (customId === 'trigger_10k' || customId === 'trigger_100k') {
-        if (!buyCmd) return interaction.reply({ content: '❌ Buy logic not found.', ephemeral: true });
-
-        const amount = customId === 'trigger_10k' ? 10000 : 100000;
-        // Passing the direct amount to the execute function in buy.js
-        await buyCmd.execute(interaction, amount);
-        return;
-      }
-
-      // Handle the generic shop trigger if used elsewhere
-      if (customId === 'trigger_shop') {
-        if (buyCmd) {
-          const linkedUser = Users.findByDiscordId(interaction.user.id);
-          await buyCmd.startPurchaseFlow(interaction, linkedUser);
-        }
-        return;
-      }
-
-      // Order Approval/Rejection Logic
-      if (customId.startsWith('approve_')) {
-        const orderId = customId.replace('approve_', '');
-        const showOrders = commands.get('showorders');
-        if (showOrders) await showOrders.handleApprove(interaction, orderId);
-        return;
-      }
-
-      if (customId.startsWith('reject_')) {
-        const orderId = customId.replace('reject_', '');
-        const showOrders = commands.get('showorders');
-        if (showOrders) await showOrders.handleReject(interaction, orderId);
-        return;
-      }
-
-      // Handle UTR button from payment instructions
-      if (customId.startsWith('utr_') && !customId.startsWith('utr_modal_')) {
-        if (buyCmd) await buyCmd.handleUtrButton(interaction);
-        return;
-      }
-    }
-
-    // --- Modal submits ---
-    if (interaction.isModalSubmit()) {
-      if (interaction.customId.startsWith('utr_modal_')) {
-        const buyCmd = commands.get('buy');
-        if (buyCmd) await buyCmd.handleUtrModal(interaction);
-        return;
-      }
-    }
-
-  } catch (err) {
-    console.error('[bot] Interaction error:', err);
-    const reply = { content: '❌ An error occurred. Try again.', ephemeral: true };
-    if (interaction.replied || interaction.deferred) {
-      interaction.followUp(reply).catch(() => {});
+    if (guildId) {
+      // Guild-scoped (instant update, good for dev/small servers)
+      await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
+      console.log(`[bot] Registered ${commands.length} guild commands to guild ${guildId}`);
     } else {
-      interaction.reply(reply).catch(() => {});
-    }
-  }
-});
-
-// Presence Logic (Server Ping)
-const MC_HOST = process.env.MC_HOST || '148.113.2.185';
-const MC_PORT = Number(process.env.MC_PORT) || 25565;
-const { pingServer } = require('./mcPing');
-
-async function updatePresence() {
-  try {
-    const result = await pingServer(MC_HOST, MC_PORT);
-    if (result.online) {
-      const count = result.players.online;
-      const max = result.players.max;
-      Settings.set('mcPlayerCount', String(count));
-      Settings.set('mcPlayerMax', String(max));
-      
-      await client.user.setPresence({
-        activities: [{ name: `${count}/${max} players online`, type: ActivityType.Watching }],
-        status: 'online',
-      });
-    } else {
-      const shopDomain = (process.env.SHOP_URL || 'https://akmsmp.onrender.com').replace('https://', '');
-      await client.user.setPresence({
-        activities: [{ name: `Shop: ${shopDomain}`, type: ActivityType.Watching }],
-        status: 'online',
-      });
+      // Global (takes up to 1h to propagate)
+      await rest.put(Routes.applicationCommands(clientId), { body: commands });
+      console.log(`[bot] Registered ${commands.length} global commands`);
     }
   } catch (err) {
-    console.error('[bot] updatePresence error:', err.message);
+    console.error('[bot] Failed to register commands:', err.message);
   }
 }
 
-client.once(Events.ClientReady, async (c) => {
-  console.log(`[bot] Logged in as ${c.user.tag}`);
-  await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
-  await updatePresence();
-  setInterval(updatePresence, 60_000);
-});
-
-client.login(TOKEN).catch(err => {
-  console.error('[bot] ❌ Login failed:', err.message);
-});
-
-module.exports = client;
+module.exports = { deployCommands };
