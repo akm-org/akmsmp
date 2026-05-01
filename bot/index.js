@@ -1,4 +1,4 @@
-const { Events, ActivityType } = require('discord.js');
+const { Events, ActivityType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
 const client = require('./client');
@@ -23,11 +23,44 @@ for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) 
   if (cmd.data) commands.set(cmd.data.name, cmd);
 }
 
-// Forward DM replies
-client.on(Events.MessageCreate, (message) => {
+// Message Listener for !deploy and DM flows
+client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
-  if (message.guild) return; 
-  tryResolve(message.author.id, message.content);
+
+  // 1. Handle !deploy command in servers
+  if (message.guild && message.content.toLowerCase() === '!deploy') {
+    // Check for administrator permissions to prevent spam
+    if (!message.member.permissions.has('Administrator')) return;
+
+    const shopEmbed = new EmbedBuilder()
+      .setTitle('🛒 AKMSMP Quick Shop')
+      .setDescription('Select a bundle below to generate a magic code instantly!')
+      .setColor(0xFFD700)
+      .setFooter({ text: 'Type /redeem [code] in-game to claim.' });
+
+    const row = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('trigger_10k')
+          .setLabel('Buy 10,000 AKM')
+          .setStyle(ButtonStyle.Success)
+          .setEmoji('💵'),
+        new ButtonBuilder()
+          .setCustomId('trigger_100k')
+          .setLabel('Buy 100,000 AKM')
+          .setStyle(ButtonStyle.Primary)
+          .setEmoji('💰')
+      );
+
+    await message.channel.send({ embeds: [shopEmbed], components: [row] });
+    await message.delete(); // Clean up the command message
+    return;
+  }
+
+  // 2. Forward DM replies to pending flows
+  if (!message.guild) {
+    tryResolve(message.author.id, message.content);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -44,17 +77,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       const { customId } = interaction;
 
-      // NEW: Quick Buy Button Logic
+      // Handle Quick Buy Buttons from !deploy
       if (customId === 'trigger_10k' || customId === 'trigger_100k') {
-        const buy = commands.get('buy');
-        if (!buy) return interaction.reply({ content: '❌ Buy command not found.', ephemeral: true });
+        const buyCommand = commands.get('buy');
+        if (!buyCommand) return interaction.reply({ content: '❌ Buy command logic not found.', ephemeral: true });
 
-        // We "fake" the amount based on which button was clicked
         const amount = customId === 'trigger_10k' ? 10000 : 100000;
         
-        // Call your existing buy command logic
-        // Note: You may need to adjust your buy.js to handle an "amount" passed manually
-        await buy.execute(interaction, amount); 
+        // Ensure your buy.js execute function can handle a manual amount argument
+        await buyCommand.execute(interaction, amount);
         return;
       }
 
@@ -99,7 +130,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// --- MC Presence Logic ---
+// Presence Logic (Server Ping)
 const MC_HOST = process.env.MC_HOST || '148.113.2.185';
 const MC_PORT = Number(process.env.MC_PORT) || 25565;
 const { pingServer } = require('./mcPing');
