@@ -8,7 +8,7 @@ const { deployCommands } = require('./deploy');
 const { Users, Settings } = require('../lib/db'); 
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499620638241984694';
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 if (!TOKEN) {
