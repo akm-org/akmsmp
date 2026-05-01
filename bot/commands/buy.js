@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+// Path corrected to reach the lib folder from the commands subfolder
 const { Users, Items, Orders, Settings } = require('../../lib/db');
 
 function rid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
@@ -11,25 +12,30 @@ module.exports = {
   async execute(interaction, directAmount = null) {
     const linkedUser = Users.findByDiscordId(interaction.user.id);
     if (!linkedUser) {
-      return interaction.reply({ content: '❌ Link your account first with `/login`.', ephemeral: true });
+      return interaction.reply({ 
+        content: '❌ You must link your account first with `/login` or `/register`.', 
+        ephemeral: true 
+      });
     }
 
-    // Direct Purchase (from !deploy buttons)
+    // Handles buttons from !deploy
     if (directAmount) {
       const item = Items.visible().find(i => i.akmValue === directAmount);
-      if (!item) return interaction.reply({ content: '❌ Pack not found.', ephemeral: true });
+      if (!item) return interaction.reply({ content: '❌ This pack is currently unavailable.', ephemeral: true });
       return this.initiateOrder(interaction, item, linkedUser, false);
     }
 
-    // Menu Purchase (from /buy)
+    // Handles standard /buy menu
     const items = Items.visible();
+    if (!items.length) return interaction.reply({ content: '❌ No items for sale.', ephemeral: true });
+
     const menu = new StringSelectMenuBuilder()
       .setCustomId(`buy_select_${interaction.user.id}`)
       .setPlaceholder('Choose a pack...')
       .addOptions(items.map(i => ({ label: i.name, description: `₹${i.priceInr}`, value: i.id })));
 
     await interaction.reply({ 
-      content: 'Select a pack:', 
+      content: 'Select a bundle:', 
       components: [new ActionRowBuilder().addComponents(menu)], 
       ephemeral: true 
     });
@@ -51,7 +57,7 @@ module.exports = {
 
     const embed = new EmbedBuilder()
       .setTitle('💳 Payment Instructions')
-      .setDescription(`Pay **₹${item.priceInr}** to \`${upiId}\` and submit the UTR.`)
+      .setDescription(`Please pay **₹${item.priceInr}** to UPI: \`${upiId}\` and submit your Transaction ID below.`)
       .setColor(0xF1A208);
 
     const row = new ActionRowBuilder().addComponents(
@@ -64,8 +70,13 @@ module.exports = {
 
   async handleUtrButton(interaction) {
     const orderId = interaction.customId.replace('utr_', '');
-    const modal = new ModalBuilder().setCustomId(`utr_modal_${orderId}`).setTitle('Submit UTR');
-    const input = new TextInputBuilder().setCustomId('utr_value').setLabel('Transaction ID').setStyle(TextInputStyle.Short).setRequired(true);
+    const modal = new ModalBuilder().setCustomId(`utr_modal_${orderId}`).setTitle('Submit Payment ID');
+    const input = new TextInputBuilder()
+      .setCustomId('utr_value')
+      .setLabel('Transaction / UTR ID')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true);
+
     modal.addComponents(new ActionRowBuilder().addComponents(input));
     await interaction.showModal(modal);
   },
@@ -74,6 +85,10 @@ module.exports = {
     const orderId = interaction.customId.replace('utr_modal_', '');
     const utr = interaction.fields.getTextInputValue('utr_value').trim();
     Orders.update(orderId, { utr, status: 'processing' });
-    await interaction.reply({ content: `✅ UTR submitted. Order ID: ${orderId}`, ephemeral: true });
+
+    await interaction.reply({ 
+      content: `✅ Payment submitted! Admin will verify UTR: **${utr}**. Order ID: ${orderId}`, 
+      ephemeral: true 
+    });
   }
 };
