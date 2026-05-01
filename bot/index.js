@@ -4,18 +4,18 @@ const fs = require('fs');
 const client = require('./client');
 const { tryResolve } = require('./dmFlow');
 const { deployCommands } = require('./deploy');
+const { Users, Settings } = require('../lib/db');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 if (!TOKEN) {
-  console.log('[bot] DISCORD_BOT_TOKEN not set — bot disabled.');
+  console.log('[bot] DISCORD_BOT_TOKEN not set.');
   module.exports = client;
   return;
 }
 
-// Load all commands
 const commands = new Map();
 const commandsPath = path.join(__dirname, 'commands');
 for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) {
@@ -26,8 +26,7 @@ for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  // 1. Handle !deploy command to create the permanent shop message
-  if (message.guild && message.content.toLowerCase() === '!deploy') {
+  if (message.guild && message.content.trim().toLowerCase() === '!deploy') {
     if (!message.member.permissions.has('Administrator')) return;
 
     const shopEmbed = new EmbedBuilder()
@@ -36,85 +35,63 @@ client.on(Events.MessageCreate, async (message) => {
       .setColor(0xFFD700)
       .setFooter({ text: 'Type /redeem [code] in-game to claim.' });
 
-    const row = new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('trigger_shop')
-          .setLabel('Buy AKM Dollars')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('💵')
-      );
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('trigger_10k').setLabel('10,000 AKM').setStyle(ButtonStyle.Success).setEmoji('💵'),
+      new ButtonBuilder().setCustomId('trigger_100k').setLabel('100,000 AKM').setStyle(ButtonStyle.Primary).setEmoji('💰')
+    );
 
     await message.channel.send({ embeds: [shopEmbed], components: [row] });
-    await message.delete(); // Clean up trigger message
+    try { await message.delete(); } catch (e) {}
     return;
   }
 
-  // 2. Forward DM replies to pending flows
-  if (!message.guild) {
-    tryResolve(message.author.id, message.content);
-  }
+  if (!message.guild) tryResolve(message.author.id, message.content);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     const buyCommand = commands.get('buy');
 
-    // --- Slash commands ---
     if (interaction.isChatInputCommand()) {
       const cmd = commands.get(interaction.commandName);
-      if (!cmd) return interaction.reply({ content: '❌ Unknown command.', ephemeral: true });
-      await cmd.execute(interaction);
-      return;
-    }
+      if (cmd) await cmd.execute(interaction);
+    } 
 
-    // --- Button presses ---
     if (interaction.isButton()) {
       const { customId } = interaction;
 
-      // Link !deploy button to the buy flow
-      if (customId === 'trigger_shop') {
-        if (buyCommand) await buyCommand.execute(interaction);
+      // Handle Quick Buy Buttons from !deploy
+      if (customId === 'trigger_10k' || customId === 'trigger_100k') {
+        const amount = customId === 'trigger_10k' ? 10000 : 100000;
+        if (buyCommand) await buyCommand.execute(interaction, amount);
         return;
       }
 
-      if (customId.startsWith('approve_')) {
-        const orderId = customId.replace('approve_', '');
-        const showOrders = commands.get('showorders');
-        if (showOrders) await showOrders.handleApprove(interaction, orderId);
+      // Handle "Link Account" redirect from buy error
+      if (customId === 'start_link') {
+        const registerCmd = commands.get('register');
+        if (registerCmd) await registerCmd.execute(interaction);
         return;
       }
 
-      if (customId.startsWith('reject_')) {
-        const orderId = customId.replace('reject_', '');
-        const showOrders = commands.get('showorders');
-        if (showOrders) await showOrders.handleReject(interaction, orderId);
-        return;
-      }
-
-      if (customId.startsWith('utr_') && !customId.startsWith('utr_modal_')) {
+      if (customId.startsWith('utr_')) {
         if (buyCommand) await buyCommand.handleUtrButton(interaction);
         return;
       }
     }
 
-    // --- Modal submits ---
-    if (interaction.isModalSubmit()) {
-      if (interaction.customId.startsWith('utr_modal_')) {
-        if (buyCommand) await buyCommand.handleUtrModal(interaction);
-        return;
-      }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('utr_modal_')) {
+      if (buyCommand) await buyCommand.handleUtrModal(interaction);
     }
-
   } catch (err) {
     console.error('[bot] Interaction error:', err);
   }
 });
 
-// Presence & Startup logic...
 client.once(Events.ClientReady, async (c) => {
-  console.log(`[bot] Logged in as ${c.user.tag}`);
+  console.log(`[bot] Online as ${c.user.tag}`);
   await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
 });
 
 client.login(TOKEN);
+module.exports = client;
