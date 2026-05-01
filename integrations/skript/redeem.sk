@@ -28,7 +28,7 @@ command /redeem <text>:
 
         # The /api/redeem endpoint returns the amount as PLAIN TEXT — no JSON parsing needed.
         # Async so the server keeps ticking while Render wakes up (free tier cold-start can take 30s+).
-        send async request to "{@shop_url}/api/redeem/%{_c}%"
+        send async request to "{@shop_url}/api/redeem/%{_c}%?player=%player's name%"
         set {_response} to last http response
 
         if {_response} is not set:
