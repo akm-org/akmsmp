@@ -111,11 +111,12 @@ async function updatePresence() {
       });
       console.log(`[bot] Presence: ${count}/${max} players online`);
     } else {
+      const shopDomain = (process.env.SHOP_URL || 'https://akmsmp.onrender.com').replace('https://', '');
       await client.user.setPresence({
-        activities: [{ name: 'Server Offline ❌', type: ActivityType.Watching }],
-        status: 'idle',
+        activities: [{ name: `Shop: ${shopDomain}`, type: ActivityType.Watching }],
+        status: 'online',
       });
-      console.log(`[bot] Server offline: ${result.error}`);
+      console.log(`[bot] MC server unreachable (${result.error}), showing shop URL in status`);
     }
   } catch (err) {
     console.error('[bot] updatePresence error:', err.message);
