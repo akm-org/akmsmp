@@ -8,7 +8,7 @@ services:
     healthCheckPath: /api/healthz
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: NODE_ENV
         value: production
       - key: SESSION_SECRET
@@ -17,6 +17,20 @@ services:
         value: /var/data
       - key: ADMIN_EMAILS
         sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        value: "1499610921792962672"
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: MC_PUSH_SECRET
+        sync: false
+      - key: SHOP_URL
+        value: https://akmsmp.onrender.com
     disk:
       name: akmsmp-data
       mountPath: /var/data
