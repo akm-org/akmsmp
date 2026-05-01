@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
-// Path corrected to reach the lib folder from the commands subfolder
+// Corrected path to move up two levels from 'bot/commands' to 'lib'
 const { Users, Items, Orders, Settings } = require('../../lib/db');
 
 function rid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
@@ -12,22 +12,19 @@ module.exports = {
   async execute(interaction, directAmount = null) {
     const linkedUser = Users.findByDiscordId(interaction.user.id);
     if (!linkedUser) {
-      return interaction.reply({ 
-        content: '❌ You must link your account first with `/login` or `/register`.', 
-        ephemeral: true 
-      });
+      return interaction.reply({ content: '❌ Please link your account first using `/login`.', ephemeral: true });
     }
 
-    // Handles buttons from !deploy
+    // If button was clicked (!deploy flow)
     if (directAmount) {
       const item = Items.visible().find(i => i.akmValue === directAmount);
       if (!item) return interaction.reply({ content: '❌ This pack is currently unavailable.', ephemeral: true });
       return this.initiateOrder(interaction, item, linkedUser, false);
     }
 
-    // Handles standard /buy menu
+    // Standard /buy command flow
     const items = Items.visible();
-    if (!items.length) return interaction.reply({ content: '❌ No items for sale.', ephemeral: true });
+    if (!items.length) return interaction.reply({ content: '❌ Shop is empty.', ephemeral: true });
 
     const menu = new StringSelectMenuBuilder()
       .setCustomId(`buy_select_${interaction.user.id}`)
@@ -35,7 +32,7 @@ module.exports = {
       .addOptions(items.map(i => ({ label: i.name, description: `₹${i.priceInr}`, value: i.id })));
 
     await interaction.reply({ 
-      content: 'Select a bundle:', 
+      content: 'Select a bundle to purchase:', 
       components: [new ActionRowBuilder().addComponents(menu)], 
       ephemeral: true 
     });
@@ -56,12 +53,12 @@ module.exports = {
     Orders.add(order);
 
     const embed = new EmbedBuilder()
-      .setTitle('💳 Payment Instructions')
-      .setDescription(`Please pay **₹${item.priceInr}** to UPI: \`${upiId}\` and submit your Transaction ID below.`)
+      .setTitle('💳 Payment Required')
+      .setDescription(`To get **${item.name}**, pay **₹${item.priceInr}** to UPI ID: \`${upiId}\`.\n\nAfter paying, click the button below to submit your UTR.`)
       .setColor(0xF1A208);
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`utr_${order.id}`).setLabel('Submit UTR').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`utr_${order.id}`).setLabel('Submit UTR / Transaction ID').setStyle(ButtonStyle.Primary)
     );
 
     if (isUpdate) await interaction.update({ embeds: [embed], components: [row] });
@@ -70,10 +67,10 @@ module.exports = {
 
   async handleUtrButton(interaction) {
     const orderId = interaction.customId.replace('utr_', '');
-    const modal = new ModalBuilder().setCustomId(`utr_modal_${orderId}`).setTitle('Submit Payment ID');
+    const modal = new ModalBuilder().setCustomId(`utr_modal_${orderId}`).setTitle('Confirm Payment');
     const input = new TextInputBuilder()
       .setCustomId('utr_value')
-      .setLabel('Transaction / UTR ID')
+      .setLabel('Enter UTR / Transaction ID')
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -87,7 +84,7 @@ module.exports = {
     Orders.update(orderId, { utr, status: 'processing' });
 
     await interaction.reply({ 
-      content: `✅ Payment submitted! Admin will verify UTR: **${utr}**. Order ID: ${orderId}`, 
+      content: `✅ Payment details submitted! Admin will verify UTR: **${utr}**.`, 
       ephemeral: true 
     });
   }
