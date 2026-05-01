@@ -1,42 +1,25 @@
-# AKMSMP Shop
+# AKMSMP Shop v2
 
-A self-contained Node.js shop for selling in-game currency via UPI, with admin verification and one-time-use redemption codes for your Discord bot / Minecraft plugin.
+A Node.js UPI shop with SQLite storage, Discord bot, Minecraft Skript integration, and rate limiting.
 
 ## Features
 
-- **Email + password auth** — bcrypt-hashed, signed-cookie sessions. First account becomes admin.
-- **CSV storage** — all data lives in `data/*.csv` (users, items, orders, settings). No database, no cloud.
-- **UPI flow** — buyer sees a QR + UPI ID, submits their UTR, admin accepts/rejects.
-- **6-character redemption codes** — random, unique, single-use. Burned on first successful verify.
-- **Customizable items** — add/edit/hide/delete packs and prices from the admin panel.
-- **Public verify endpoint** — `GET /api/verify-code/:code` for your Discord bot or Minecraft plugin to redeem codes.
+- **Email + password auth** — bcrypt-hashed, signed-cookie sessions
+- **SQLite storage** — uses Node 22's built-in `node:sqlite` (no native packages)
+- **UPI payment flow** — buyer sees QR + UPI ID, submits UTR, admin accepts/rejects
+- **16-character redemption codes** — grouped as `XXXX-XXXX-XXXX-XXXX`, 48-hour expiry, single-use
+- **Discord bot** — `/buy`, `/register`, `/login`, `/history`, `/showorders` with approve/reject buttons, `/adminlookup`, `/serverstatus`
+- **Discord webhook** — get notified when a code is redeemed in-game
+- **Rate limiting** — 15 requests/min on all code endpoints
+- **Minecraft player count** — live player count pushed from Skript, shown on Discord `/serverstatus`
 
-## Run locally
+## Quick start (local)
 
 ```bash
-cd akmsmp
-npm install
-npm start            # http://localhost:5000
+cd akmsmp && npm install && npm start   # http://localhost:5000
 ```
 
-Or set a port: `PORT=3000 npm start`
-
-## Admin
-
-The very first user to sign up becomes admin automatically. After that, only emails listed in the `ADMIN_EMAILS` env var (comma-separated) become admin on signup.
-
-## Deploy
-
-### On Replit / Render / Railway / Fly.io / VPS  ✅ recommended
-These have a real persistent disk, so `data/*.csv` survives across restarts. Just `npm install && npm start`. Set `SESSION_SECRET` to a random string in production.
-
-### On Vercel  ⚠️ data WON'T persist
-Vercel's serverless filesystem is read-only outside `/tmp`, and `/tmp` is wiped between invocations. The `vercel.json` is included for compatibility (the app will boot and serve), **but every CSV write is lost**. For real persistence on Vercel you'd need to swap `lib/csvStore.js` for Vercel KV / Postgres / Blob storage.
-
-To deploy to Vercel anyway:
-```bash
-vercel
-```
+> Requires Node.js 22+
 
 ## Environment variables
 
@@ -44,97 +27,103 @@ vercel
 | --- | --- | --- |
 | `PORT` | Port to listen on | `5000` |
 | `SESSION_SECRET` | HMAC secret for session cookies | `akmsmp-dev-secret-change-me` |
-| `ADMIN_EMAILS` | Extra comma-separated emails granted admin on signup | _empty_ |
-| `SEED_ADMIN_PASSWORD` | Initial password used when seeding the two permanent admin accounts | `akm2009@` |
-| `DATA_DIR` | Where CSV files live | `./data` |
+| `DATA_DIR` | Where `akmsmp.db` (SQLite) lives | `./data` |
+| `SEED_ADMIN_PASSWORD` | Password for the two permanent admin accounts on first run | `akm2009@` |
+| `DISCORD_BOT_TOKEN` | Your Discord bot token | — (bot disabled if not set) |
+| `DISCORD_CLIENT_ID` | Your app's Client ID from Discord portal | `1499610921792962672` |
+| `DISCORD_GUILD_ID` | Your server ID for instant command registration | — (global if unset) |
+| `DISCORD_WEBHOOK_URL` | Discord webhook URL for payment/redemption notifications | — |
+| `MC_PUSH_SECRET` | Secret token for player-count Skript push | — (open if unset) |
+| `SHOP_URL` | Public URL of the shop | `https://akmsmp.onrender.com` |
 
-### Permanent admin accounts
+## Permanent admin accounts
 
-Two accounts are auto-created on first run:
+Two accounts are auto-created on first run with `SEED_ADMIN_PASSWORD` (default `akm2009@`):
 - `adwaithkm896@gmail.com`
 - `akmsmpadmin@gmail.com`
 
-Both with the password from `SEED_ADMIN_PASSWORD` (default `akm2009@`). These emails are **always** treated as admin, even if their `isAdmin` row is changed in the CSV. Change the seed password by setting `SEED_ADMIN_PASSWORD` in Render's env vars **before** the first deploy.
+These emails are **always** treated as admin even if the DB row is changed.
+⚠️ **Change the password** after first login.
 
-## Code verify API (for your bot / Skript)
+## Discord bot setup
 
-### `GET /api/verify-code/:code` — destructive, marks code as used
+### 1 — Create / configure your bot
+1. Go to https://discord.com/developers/applications → your app → **Bot**
+2. Enable **Server Members Intent**, **Message Content Intent**, **Presence Intent**
+3. Copy your **Token**
 
+### 2 — Invite the bot
+Use this URL (replace CLIENT_ID):
 ```
-GET /api/verify-code/ABC123
-```
-
-Successful (first call):
-```json
-{"status":"success","code":"ABC123","value":10000,"itemName":"10,000 AKM Dollars"}
-```
-
-Already redeemed:
-```json
-{"status":"error","message":"Code already redeemed"}
+https://discord.com/oauth2/authorize?client_id=1499610921792962672&permissions=274878008384&scope=bot+applications.commands
 ```
 
-The code is **marked used on the first successful response** — subsequent calls fail with HTTP 400.
-
-The endpoint is **lenient about input**: it uppercases the code and strips anything that isn't `A–Z` or `0–9`. So `abc123`, `ABC-123`, `ABC123/`, `abc%20123` all resolve to `ABC123`.
-
-### `GET /api/redeem/:code` — plain-text version (recommended for Skript)
-
-Same behavior as `/api/verify-code/` (marks the code used), but returns just the AKM amount as plain text. No JSON parsing required.
-
-| Status | Body |
-|---|---|
-| `200` | `100000` (the amount) |
-| `404` | `error:not-found` |
-| `400` | `error:not-active` |
-| `410` | `error:already-redeemed` |
-
-This is what the bundled Skript file uses.
-
-### `GET /api/peek-code/:code` — non-destructive, for debugging
-
-Look up a code's status WITHOUT marking it used. Open in a browser:
-
+### 3 — Set Render env vars
+In Render → your service → Environment:
 ```
-GET /api/peek-code/ABC123
+DISCORD_BOT_TOKEN   = <your bot token>
+DISCORD_GUILD_ID    = <your Discord server ID>   # right-click server → Copy Server ID
+DISCORD_WEBHOOK_URL = <webhook URL from your server's channel settings>
 ```
+Redeploy. Commands register automatically on startup.
 
-Returns:
-```json
-{
-  "status": "ok",
-  "code": "ABC123",
-  "value": 10000,
-  "itemName": "10,000 AKM Dollars",
-  "orderStatus": "paid",
-  "used": false,
-  "createdAt": "1777571771531",
-  "decidedAt": "1777571771987"
-}
-```
+### Bot commands
 
-Use this to confirm a code exists in the database before debugging your bot/Skript.
-
-### `GET /api/healthz`
-
-Used by Render's health check. Returns `{"ok":true,"ts":...}`.
+| Command | Who | What it does |
+|---|---|---|
+| `/register` | Anyone | Create a shop account via DM |
+| `/login` | Anyone | Link Discord to existing account |
+| `/buy` | Linked users | Browse packs, create order, submit UTR |
+| `/history` | Linked users | See own orders (admins see all) |
+| `/orderhistory` | Admin | Full order list |
+| `/showorders` | Admin | Pending orders with ✅ Approve / ❌ Reject buttons |
+| `/adminlookup email:...` | Admin | All orders for a specific user |
+| `/serverstatus` | Anyone | Server player count + shop stats |
 
 ## Minecraft integration
 
-A ready-to-use Skript file for the in-game `/redeem <CODE>` command lives at [`integrations/skript/`](./integrations/skript/). Drop it into `plugins/Skript/scripts/`, set your shop URL at the top, and players can redeem codes themselves — no Discord bot needed.
+### Player count (live on `/serverstatus` bot command)
+Drop `integrations/skript/player-count.sk` into `plugins/Skript/scripts/`. Set the same `MC_PUSH_SECRET` in Render and in the script.
 
-## File layout
+### Code redemption (`/redeem <CODE>`)
+Drop `integrations/skript/redeem.sk` into `plugins/Skript/scripts/` and set `shop_url` at the top.
 
-```
-akmsmp/
-├── server.js            # Express app, all routes
-├── lib/
-│   ├── csvStore.js      # CSV read/write
-│   ├── db.js            # Users / Items / Orders / Settings models
-│   ├── auth.js          # signed-cookie sessions, bcrypt
-│   └── codes.js         # 6-char unique code generator
-├── public/              # vanilla HTML/CSS/JS frontend
-├── api/index.js         # Vercel serverless entry
-├── vercel.json
-└── data/                # CSV files (auto-created)
-```
+## Code API
+
+### `GET /api/redeem/:code?player=<name>` (plain text — recommended for Skript)
+Returns `100000` (the amount) on success, or `error:*` on failure.
+
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `100000` | Redeemed. Give player that amount. |
+| 404 | `error:not-found` | Code doesn't exist. |
+| 400 | `error:not-active` | Not approved yet. |
+| 410 | `error:already-redeemed` | Already used. |
+| 410 | `error:expired` | 48-hour window passed. |
+| 429 | _(json)_ | Rate limited (>15/min per IP). |
+
+### `GET /api/verify-code/:code?player=<name>` (JSON)
+Same behavior but returns JSON with `{status, code, value, itemName}`.
+
+### `GET /api/peek-code/:code` (non-destructive, for debugging)
+Look up a code WITHOUT marking it used. Safe to use from a browser.
+
+### `GET /api/mc/player-count`
+Current online player count pushed by your Minecraft server.
+
+### `POST /api/mc/player-count`
+Update player count from Skript. Header: `x-mc-secret: <MC_PUSH_SECRET>`. Body: `{"count":5,"players":["Alex","Steve"]}`.
+
+### `GET /api/healthz`
+Render health check. Returns `{"ok":true}`.
+
+## Deploy on Render
+
+1. Push this repo to GitHub
+2. On Render: **New Web Service** → connect repo → pick `main` branch
+3. Set env vars (especially `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_WEBHOOK_URL`)
+4. Set **Node Version** to `22` or higher
+5. The persistent disk at `/var/data` keeps `akmsmp.db` across restarts
+
+---
+⚠️ The GitHub token and bot token in the session should be revoked and rotated immediately.
