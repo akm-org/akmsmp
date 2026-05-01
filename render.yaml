@@ -31,6 +31,10 @@ services:
         sync: false
       - key: SHOP_URL
         value: https://akmsmp.onrender.com
+      - key: MC_HOST
+        value: "148.113.2.185"
+      - key: MC_PORT
+        value: "25565"
     disk:
       name: akmsmp-data
       mountPath: /var/data
