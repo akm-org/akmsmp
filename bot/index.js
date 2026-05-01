@@ -76,6 +76,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --- Button presses ---
     if (interaction.isButton()) {
       const { customId } = interaction;
+      if (customId === 'trigger_shop') {
+        const buy = commands.get('buy');
+        if (buy) await buy.startPurchaseFlow(interaction);
+        return;
+      }
 
       // Handle Quick Buy Buttons from !deploy
       if (customId === 'trigger_10k' || customId === 'trigger_100k') {
