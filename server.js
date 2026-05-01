@@ -1,20 +1,60 @@
 const path = require('path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
+const fetch = require('node-fetch');
 
-const { init, Users, Items, Orders, Settings, ITEM_HEADERS, ORDER_HEADERS } = require('./lib/db');
+const { init, Users, Items, Orders, Settings } = require('./lib/db');
 const { setSession, clearSession, getUser, requireAuth, requireAdmin, isAdminUser, hash, compare, adminEmails } = require('./lib/auth');
-const { uniqueCode } = require('./lib/codes');
+const { uniqueCode, formatCode } = require('./lib/codes');
 
 init();
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '256kb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 function rid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+// ---------- Rate limiting for public code endpoints ----------
+const redeemLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: 'error', message: 'Too many requests — slow down and try again.' },
+});
+
+// ---------- Discord webhook helper ----------
+async function notifyWebhook(embed) {
+  const url = process.env.DISCORD_WEBHOOK_URL;
+  if (!url) return;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embeds: [embed] }),
+    });
+  } catch (e) {
+    console.error('[webhook]', e.message);
+  }
+}
+
+// Helper to DM a user via the Discord bot when an order is approved/rejected via the web admin
+async function dmDiscordUser(discordId, content) {
+  if (!discordId) return;
+  try {
+    const botClient = require('./bot/client');
+    if (!botClient.isReady()) return;
+    const user = await botClient.users.fetch(discordId);
+    await user.send(content);
+  } catch (e) {
+    console.error('[dm]', e.message);
+  }
 }
 
 // ---------- Auth ----------
@@ -27,7 +67,7 @@ app.post('/api/signup', async (req, res) => {
   if (Users.findByEmail(email)) return res.status(409).json({ error: 'Email already registered' });
 
   const allUsers = Users.all();
-  const isFirst = allUsers.length === 0;
+  const isFirst = allUsers.filter(u => !adminEmails().includes(u.email)).length === 0;
   const isAdminEmail = adminEmails().includes(String(email).toLowerCase());
   const user = {
     id: rid(),
@@ -74,6 +114,7 @@ app.get('/api/settings/public', (req, res) => {
     upiName: Settings.get('upiName'),
     serverName: Settings.get('serverName') || 'AKMSMP',
     qrImagePath: Settings.get('qrImagePath') || '',
+    playerCount: Settings.get('mcPlayerCount') || '0',
   });
 });
 
@@ -102,15 +143,25 @@ app.post('/api/orders', requireAuth, (req, res) => {
 app.post('/api/orders/:id/utr', requireAuth, (req, res) => {
   const { utr } = req.body || {};
   if (!utr || String(utr).length < 6) return res.status(400).json({ error: 'Enter a valid UTR / Transaction ID' });
-  const orders = Orders.all();
-  const idx = orders.findIndex(o => o.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Order not found' });
-  if (orders[idx].userId !== req.user.id) return res.status(403).json({ error: 'Not your order' });
-  if (orders[idx].status !== 'awaiting_utr') return res.status(400).json({ error: 'UTR already submitted' });
-  orders[idx].utr = String(utr).trim();
-  orders[idx].status = 'processing';
-  Orders.save(orders);
-  res.json({ ok: true, order: orders[idx] });
+  const order = Orders.findById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.userId !== req.user.id) return res.status(403).json({ error: 'Not your order' });
+  if (order.status !== 'awaiting_utr') return res.status(400).json({ error: 'UTR already submitted' });
+  Orders.update(order.id, { utr: String(utr).trim(), status: 'processing' });
+
+  notifyWebhook({
+    title: '🔔 Payment Submitted (Web)',
+    color: 0xF1A208,
+    fields: [
+      { name: 'User', value: req.user.email, inline: true },
+      { name: 'Pack', value: order.itemName, inline: true },
+      { name: 'UTR', value: `\`${utr}\``, inline: false },
+    ],
+    footer: { text: 'Use /showorders in Discord to approve' },
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({ ok: true, order: Orders.findById(order.id) });
 });
 
 app.get('/api/orders/mine', requireAuth, (req, res) => {
@@ -120,34 +171,62 @@ app.get('/api/orders/mine', requireAuth, (req, res) => {
 // ---------- Admin ----------
 app.get('/api/admin/orders', requireAdmin, (req, res) => {
   const status = req.query.status;
-  let rows = Orders.all().sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+  let rows = Orders.all();
   if (status) rows = rows.filter(o => o.status === status);
   const usersById = Object.fromEntries(Users.all().map(u => [u.id, u.email]));
   res.json({ orders: rows.map(o => ({ ...o, userEmail: usersById[o.userId] || '(deleted)' })) });
 });
 
-app.post('/api/admin/orders/:id/accept', requireAdmin, (req, res) => {
-  const orders = Orders.all();
-  const idx = orders.findIndex(o => o.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Order not found' });
-  if (orders[idx].status !== 'processing') return res.status(400).json({ error: 'Order not in processing state' });
-  orders[idx].code = uniqueCode();
-  orders[idx].status = 'paid';
-  orders[idx].used = 'false';
-  orders[idx].decidedAt = String(Date.now());
-  Orders.save(orders);
-  res.json({ ok: true, order: orders[idx] });
+app.post('/api/admin/orders/:id/accept', requireAdmin, async (req, res) => {
+  const order = Orders.findById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status !== 'processing') return res.status(400).json({ error: 'Order not in processing state' });
+  const code = uniqueCode();
+  const expiresAt = Date.now() + 48 * 3600 * 1000;
+  Orders.update(order.id, { code, status: 'paid', used: 'false', expiresAt: String(expiresAt), decidedAt: String(Date.now()) });
+  const updated = Orders.findById(order.id);
+
+  // DM buyer if linked Discord account
+  const buyer = Users.findById(order.userId);
+  if (buyer && buyer.discordId) {
+    const { EmbedBuilder } = require('discord.js');
+    const embed = new EmbedBuilder()
+      .setTitle('🎉 Order Approved!')
+      .setColor(0x57F287)
+      .addFields(
+        { name: 'Pack', value: order.itemName, inline: true },
+        { name: '🔑 Magic Code', value: `\`\`\`${formatCode(code)}\`\`\``, inline: false },
+        { name: 'Expires', value: `${new Date(expiresAt).toLocaleString('en-IN')} (48h)`, inline: false },
+      )
+      .setDescription(`Use \`/redeem ${code}\` in Minecraft!`);
+    dmDiscordUser(buyer.discordId, { embeds: [embed] });
+  }
+
+  notifyWebhook({
+    title: '✅ Order Approved (Web Admin)',
+    color: 0x57F287,
+    fields: [
+      { name: 'Buyer', value: buyer ? buyer.email : 'Unknown', inline: true },
+      { name: 'Pack', value: order.itemName, inline: true },
+    ],
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({ ok: true, order: updated });
 });
 
-app.post('/api/admin/orders/:id/reject', requireAdmin, (req, res) => {
-  const orders = Orders.all();
-  const idx = orders.findIndex(o => o.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Order not found' });
-  if (orders[idx].status === 'paid') return res.status(400).json({ error: 'Cannot reject a paid order' });
-  orders[idx].status = 'rejected';
-  orders[idx].decidedAt = String(Date.now());
-  Orders.save(orders);
-  res.json({ ok: true, order: orders[idx] });
+app.post('/api/admin/orders/:id/reject', requireAdmin, async (req, res) => {
+  const order = Orders.findById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.status === 'paid') return res.status(400).json({ error: 'Cannot reject a paid order' });
+  Orders.update(order.id, { status: 'rejected', decidedAt: String(Date.now()) });
+
+  const buyer = Users.findById(order.userId);
+  if (buyer && buyer.discordId) {
+    dmDiscordUser(buyer.discordId, `❌ **Order rejected** — ${order.itemName} (₹${order.priceInr}). Contact an admin if you believe this is a mistake.`);
+  }
+
+  res.json({ ok: true, order: Orders.findById(order.id) });
 });
 
 app.get('/api/admin/items', requireAdmin, (req, res) => {
@@ -157,36 +236,33 @@ app.get('/api/admin/items', requireAdmin, (req, res) => {
 app.post('/api/admin/items', requireAdmin, (req, res) => {
   const { name, priceInr, akmValue, sortOrder, visible } = req.body || {};
   if (!name || !priceInr || !akmValue) return res.status(400).json({ error: 'Missing fields' });
-  const items = Items.all();
-  items.push({
+  Items.add({
     id: 'pack_' + rid(),
     name: String(name),
-    priceInr: String(priceInr),
-    akmValue: String(akmValue),
-    sortOrder: String(sortOrder || (items.length + 1)),
+    priceInr: Number(priceInr),
+    akmValue: Number(akmValue),
+    sortOrder: Number(sortOrder || 0),
     visible: visible === false ? 'false' : 'true',
   });
-  Items.save(items);
   res.json({ ok: true });
 });
 
 app.put('/api/admin/items/:id', requireAdmin, (req, res) => {
-  const items = Items.all();
-  const idx = items.findIndex(i => i.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
+  const item = Items.findById(req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
   const { name, priceInr, akmValue, sortOrder, visible } = req.body || {};
-  if (name !== undefined) items[idx].name = String(name);
-  if (priceInr !== undefined) items[idx].priceInr = String(priceInr);
-  if (akmValue !== undefined) items[idx].akmValue = String(akmValue);
-  if (sortOrder !== undefined) items[idx].sortOrder = String(sortOrder);
-  if (visible !== undefined) items[idx].visible = visible ? 'true' : 'false';
-  Items.save(items);
+  const update = {};
+  if (name !== undefined) update.name = String(name);
+  if (priceInr !== undefined) update.priceInr = Number(priceInr);
+  if (akmValue !== undefined) update.akmValue = Number(akmValue);
+  if (sortOrder !== undefined) update.sortOrder = Number(sortOrder);
+  if (visible !== undefined) update.visible = Boolean(visible);
+  Items.update(req.params.id, update);
   res.json({ ok: true });
 });
 
 app.delete('/api/admin/items/:id', requireAdmin, (req, res) => {
-  const items = Items.all().filter(i => i.id !== req.params.id);
-  Items.save(items);
+  Items.delete(req.params.id);
   res.json({ ok: true });
 });
 
@@ -200,81 +276,123 @@ app.put('/api/admin/settings', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- Public verify (for Discord bot / Minecraft plugin / Skript) ----------
-// Normalize incoming code: uppercase, strip anything that isn't A-Z/0-9.
-// This makes the endpoint forgiving of typos like trailing slashes, %20, accidental dashes, lowercase.
+// ---------- Minecraft player count (push from Skript) ----------
+// Minecraft server POSTs here every minute: { "count": 5, "players": ["Alex", "Steve"] }
+// Secured by MC_PUSH_SECRET env var (set same value in Skript)
+app.post('/api/mc/player-count', (req, res) => {
+  const secret = process.env.MC_PUSH_SECRET;
+  if (secret && req.headers['x-mc-secret'] !== secret) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { count, players } = req.body || {};
+  Settings.set('mcPlayerCount', String(Number(count) || 0));
+  Settings.set('mcPlayerCountUpdated', String(Date.now()));
+  if (players && Array.isArray(players)) Settings.set('mcPlayerList', players.slice(0, 50).join(','));
+  res.json({ ok: true });
+});
+
+app.get('/api/mc/player-count', (req, res) => {
+  res.json({
+    count: Number(Settings.get('mcPlayerCount') || 0),
+    players: (Settings.get('mcPlayerList') || '').split(',').filter(Boolean),
+    updatedAt: Settings.get('mcPlayerCountUpdated') || null,
+  });
+});
+
+// ---------- Public code endpoints (rate limited) ----------
 function normalizeCode(raw) {
   return String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-// Non-destructive lookup — does NOT mark the code used. Useful for debugging from a browser.
-app.get('/api/peek-code/:code', (req, res) => {
+app.get('/api/peek-code/:code', redeemLimiter, (req, res) => {
   const code = normalizeCode(req.params.code);
   if (!code) return res.status(400).json({ status: 'error', message: 'Code required' });
-  const o = Orders.all().find(x => normalizeCode(x.code) === code);
+  const o = Orders.findByCode(code);
   if (!o) return res.status(404).json({ status: 'error', message: 'Code not found', queriedCode: code });
+  const expired = o.expiresAt && Number(o.expiresAt) < Date.now();
   res.json({
     status: 'ok',
     code: o.code,
+    formatted: formatCode(o.code),
     value: Number(o.akmValue),
     itemName: o.itemName,
     orderStatus: o.status,
     used: o.used === 'true',
+    expired,
+    expiresAt: o.expiresAt || null,
     createdAt: o.createdAt,
     decidedAt: o.decidedAt,
   });
 });
 
-// Marks the code as used on the FIRST successful verify; subsequent calls fail.
-app.get('/api/verify-code/:code', (req, res) => {
+app.get('/api/verify-code/:code', redeemLimiter, async (req, res) => {
   const raw = String(req.params.code || '');
   const code = normalizeCode(raw);
-  console.log(`[verify-code] raw="${raw}" normalized="${code}" from ${req.ip}`);
+  const player = req.query.player || 'Unknown';
+  console.log(`[verify-code] raw="${raw}" normalized="${code}" player="${player}" from ${req.ip}`);
   if (!code) return res.status(400).json({ status: 'error', message: 'Code required' });
-  const orders = Orders.all();
-  const idx = orders.findIndex(o => normalizeCode(o.code) === code);
-  if (idx === -1) {
-    console.log(`[verify-code] NOT FOUND: ${code} (have ${orders.filter(o => o.code).length} codes total)`);
+  const o = Orders.findByCode(code);
+  if (!o) {
+    console.log(`[verify-code] NOT FOUND: ${code}`);
     return res.status(404).json({ status: 'error', message: 'Code not found' });
   }
-  const o = orders[idx];
   if (o.status !== 'paid') return res.status(400).json({ status: 'error', message: 'Code not active' });
   if (o.used === 'true') return res.status(400).json({ status: 'error', message: 'Code already redeemed' });
-  orders[idx].used = 'true';
-  Orders.save(orders);
-  console.log(`[verify-code] REDEEMED: ${o.code} value=${o.akmValue} item="${o.itemName}"`);
+  if (o.expiresAt && Number(o.expiresAt) < Date.now()) return res.status(400).json({ status: 'error', message: 'Code expired' });
+
+  Orders.update(o.id, { used: 'true' });
+  console.log(`[verify-code] REDEEMED: ${o.code} value=${o.akmValue} player="${player}"`);
+
+  notifyWebhook({
+    title: '🎮 Code Redeemed In-Game!',
+    color: 0x57F287,
+    fields: [
+      { name: 'Player', value: player, inline: true },
+      { name: 'Pack', value: o.itemName, inline: true },
+      { name: 'Amount', value: `${Number(o.akmValue).toLocaleString()} AKM$`, inline: true },
+    ],
+    timestamp: new Date().toISOString(),
+  });
+
   res.json({ status: 'success', code: o.code, value: Number(o.akmValue), itemName: o.itemName });
 });
 
-// ---------- Plain-text redeem (Skript-friendly) ----------
-// Returns just the AKM amount as plain text on success, e.g. "100000".
-// Errors return non-200 status with a short text message in the body.
-// This avoids JSON parsing entirely on the Skript side.
-app.get('/api/redeem/:code', (req, res) => {
+app.get('/api/redeem/:code', redeemLimiter, async (req, res) => {
   const raw = String(req.params.code || '');
   const code = normalizeCode(raw);
-  console.log(`[redeem] raw="${raw}" normalized="${code}" from ${req.ip}`);
+  const player = req.query.player || 'Unknown';
+  console.log(`[redeem] raw="${raw}" normalized="${code}" player="${player}" from ${req.ip}`);
   res.type('text/plain');
   if (!code) return res.status(400).send('error:missing-code');
-  const orders = Orders.all();
-  const idx = orders.findIndex(o => normalizeCode(o.code) === code);
-  if (idx === -1) {
+  const o = Orders.findByCode(code);
+  if (!o) {
     console.log(`[redeem] NOT FOUND: ${code}`);
     return res.status(404).send('error:not-found');
   }
-  const o = orders[idx];
   if (o.status !== 'paid') return res.status(400).send('error:not-active');
   if (o.used === 'true') return res.status(410).send('error:already-redeemed');
-  orders[idx].used = 'true';
-  Orders.save(orders);
-  console.log(`[redeem] REDEEMED: ${o.code} value=${o.akmValue} item="${o.itemName}"`);
+  if (o.expiresAt && Number(o.expiresAt) < Date.now()) return res.status(410).send('error:expired');
+
+  Orders.update(o.id, { used: 'true' });
+  console.log(`[redeem] REDEEMED: ${o.code} value=${o.akmValue} player="${player}"`);
+
+  notifyWebhook({
+    title: '🎮 Code Redeemed In-Game!',
+    color: 0x57F287,
+    fields: [
+      { name: 'Player', value: player, inline: true },
+      { name: 'Pack', value: o.itemName, inline: true },
+      { name: 'Amount', value: `${Number(o.akmValue).toLocaleString()} AKM$`, inline: true },
+    ],
+    timestamp: new Date().toISOString(),
+  });
+
   res.status(200).send(String(Number(o.akmValue) || 0));
 });
 
-// Health check for Render
 app.get('/api/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// SPA fallback - serve index.html for non-API routes
+// SPA fallback
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -282,7 +400,9 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
 const PORT = Number(process.env.PORT) || 5000;
 if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AKMSMP running on http://0.0.0.0:${PORT}`);
+    console.log(`AKMSMP v2 running on http://0.0.0.0:${PORT}`);
+    // Start Discord bot (only if token is set)
+    require('./bot/index');
   });
 }
 
