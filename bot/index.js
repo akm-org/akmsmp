@@ -1,4 +1,4 @@
-const { Events } = require('discord.js');
+const { Events, ActivityType } = require('discord.js');
 const path = require('path');
 const fs = require('fs');
 const client = require('./client');
@@ -87,9 +87,47 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+const MC_HOST = process.env.MC_HOST || '148.113.2.185';
+const MC_PORT = Number(process.env.MC_PORT) || 25565;
+const { pingServer } = require('./mcPing');
+const { Settings } = require('../lib/db');
+
+async function updatePresence() {
+  try {
+    const result = await pingServer(MC_HOST, MC_PORT);
+    if (result.online) {
+      const count = result.players.online;
+      const max = result.players.max;
+      // Store in DB so /serverstatus and the website can read it
+      Settings.set('mcPlayerCount', String(count));
+      Settings.set('mcPlayerMax', String(max));
+      Settings.set('mcPlayerCountUpdated', String(Date.now()));
+      if (result.players.sample?.length) {
+        Settings.set('mcPlayerList', result.players.sample.join(','));
+      }
+      await client.user.setPresence({
+        activities: [{ name: `${count}/${max} players online`, type: ActivityType.Watching }],
+        status: 'online',
+      });
+      console.log(`[bot] Presence: ${count}/${max} players online`);
+    } else {
+      await client.user.setPresence({
+        activities: [{ name: 'Server Offline ❌', type: ActivityType.Watching }],
+        status: 'idle',
+      });
+      console.log(`[bot] Server offline: ${result.error}`);
+    }
+  } catch (err) {
+    console.error('[bot] updatePresence error:', err.message);
+  }
+}
+
 client.once(Events.ClientReady, async (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
   await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
+  // Set presence immediately then update every minute
+  await updatePresence();
+  setInterval(updatePresence, 60_000);
 });
 
 client.login(TOKEN).catch(err => console.error('[bot] Login failed:', err.message));
