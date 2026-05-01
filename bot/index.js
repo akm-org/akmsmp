@@ -4,7 +4,8 @@ const fs = require('fs');
 const client = require('./client');
 const { tryResolve } = require('./dmFlow');
 const { deployCommands } = require('./deploy');
-const { Users, Settings } = require('./lib/db');
+// Corrected path: moving up one level to find the lib folder
+const { Users, Settings } = require('../lib/db'); 
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
@@ -26,11 +27,9 @@ for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) 
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
+  // Handles !deploy with a clean match and admin check
   if (message.guild && message.content.trim().toLowerCase() === '!deploy') {
-    // Check permissions
-    if (!message.member.permissions.has('Administrator')) {
-      return console.log(`[bot] !deploy ignored: ${message.author.tag} is not an admin.`);
-    }
+    if (!message.member.permissions.has('Administrator')) return;
 
     const shopEmbed = new EmbedBuilder()
       .setTitle('🛒 AKMSMP Quick Shop')
@@ -39,8 +38,16 @@ client.on(Events.MessageCreate, async (message) => {
       .setFooter({ text: 'Type /redeem [code] in-game to claim.' });
 
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('trigger_10k').setLabel('10,000 AKM').setStyle(ButtonStyle.Success).setEmoji('💵'),
-      new ButtonBuilder().setCustomId('trigger_100k').setLabel('100,000 AKM').setStyle(ButtonStyle.Primary).setEmoji('💰')
+      new ButtonBuilder()
+        .setCustomId('trigger_10k')
+        .setLabel('10,000 AKM')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('💵'),
+      new ButtonBuilder()
+        .setCustomId('trigger_100k')
+        .setLabel('100,000 AKM')
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji('💰')
     );
 
     await message.channel.send({ embeds: [shopEmbed], components: [row] });
@@ -60,6 +67,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton()) {
       const buyCommand = commands.get('buy');
+      // Link the buttons from !deploy to the buy command logic
       if (interaction.customId === 'trigger_10k' || interaction.customId === 'trigger_100k') {
         const amount = interaction.customId === 'trigger_10k' ? 10000 : 100000;
         if (buyCommand) await buyCommand.execute(interaction, amount);
