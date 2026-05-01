@@ -7,7 +7,7 @@ const { deployCommands } = require('./deploy');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || '1499610921792962672';
-const GUILD_ID = process.env.DISCORD_GUILD_ID; // optional: instant registration
+const GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 if (!TOKEN) {
   console.log('[bot] DISCORD_BOT_TOKEN not set — bot disabled.');
@@ -23,10 +23,10 @@ for (const file of fs.readdirSync(commandsPath).filter(f => f.endsWith('.js'))) 
   if (cmd.data) commands.set(cmd.data.name, cmd);
 }
 
-// Forward DM replies to pending flows
+// Forward DM replies
 client.on(Events.MessageCreate, (message) => {
   if (message.author.bot) return;
-  if (message.guild) return; // only DMs
+  if (message.guild) return; 
   tryResolve(message.author.id, message.content);
 });
 
@@ -43,6 +43,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // --- Button presses ---
     if (interaction.isButton()) {
       const { customId } = interaction;
+
+      // NEW: Quick Buy Button Logic
+      if (customId === 'trigger_10k' || customId === 'trigger_100k') {
+        const buy = commands.get('buy');
+        if (!buy) return interaction.reply({ content: '❌ Buy command not found.', ephemeral: true });
+
+        // We "fake" the amount based on which button was clicked
+        const amount = customId === 'trigger_10k' ? 10000 : 100000;
+        
+        // Call your existing buy command logic
+        // Note: You may need to adjust your buy.js to handle an "amount" passed manually
+        await buy.execute(interaction, amount); 
+        return;
+      }
 
       if (customId.startsWith('approve_')) {
         const orderId = customId.replace('approve_', '');
@@ -74,8 +88,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    // --- Select menus (buy command handles its own collector, nothing extra needed) ---
-
   } catch (err) {
     console.error('[bot] Interaction error:', err);
     const reply = { content: '❌ An error occurred. Try again.', ephemeral: true };
@@ -87,6 +99,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// --- MC Presence Logic ---
 const MC_HOST = process.env.MC_HOST || '148.113.2.185';
 const MC_PORT = Number(process.env.MC_PORT) || 25565;
 const { pingServer } = require('./mcPing');
@@ -98,7 +111,6 @@ async function updatePresence() {
     if (result.online) {
       const count = result.players.online;
       const max = result.players.max;
-      // Store in DB so /serverstatus and the website can read it
       Settings.set('mcPlayerCount', String(count));
       Settings.set('mcPlayerMax', String(max));
       Settings.set('mcPlayerCountUpdated', String(Date.now()));
@@ -109,14 +121,12 @@ async function updatePresence() {
         activities: [{ name: `${count}/${max} players online`, type: ActivityType.Watching }],
         status: 'online',
       });
-      console.log(`[bot] Presence: ${count}/${max} players online`);
     } else {
       const shopDomain = (process.env.SHOP_URL || 'https://akmsmp.onrender.com').replace('https://', '');
       await client.user.setPresence({
         activities: [{ name: `Shop: ${shopDomain}`, type: ActivityType.Watching }],
         status: 'online',
       });
-      console.log(`[bot] MC server unreachable (${result.error}), showing shop URL in status`);
     }
   } catch (err) {
     console.error('[bot] updatePresence error:', err.message);
@@ -126,19 +136,12 @@ async function updatePresence() {
 client.once(Events.ClientReady, async (c) => {
   console.log(`[bot] Logged in as ${c.user.tag}`);
   await deployCommands(TOKEN, CLIENT_ID, GUILD_ID);
-  // Set presence immediately then update every minute
   await updatePresence();
   setInterval(updatePresence, 60_000);
 });
 
 client.login(TOKEN).catch(err => {
   console.error('[bot] ❌ Login failed:', err.message);
-  if (err.message.includes('TOKEN_INVALID') || err.message.includes('invalid token')) {
-    console.error('[bot] → The DISCORD_BOT_TOKEN env var is wrong or expired. Regenerate it in the Discord Developer Portal.');
-  }
-  if (err.message.includes('DisallowedIntents') || err.message.includes('Privileged intent')) {
-    console.error('[bot] → A privileged intent is not enabled. Go to Discord Dev Portal → Bot → Privileged Gateway Intents and enable "Message Content Intent".');
-  }
 });
 
 module.exports = client;
